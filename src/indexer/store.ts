@@ -60,25 +60,28 @@ async function ensureGameRow(client: PoolClient, event: DecodedEvent): Promise<v
   await client.query(
     `INSERT INTO games (player, contract_id, first_ledger, first_seen_at, last_ledger, last_event_at)
      VALUES ($1, $2, $3, $4, $3, $4)
-     ON CONFLICT (player) DO UPDATE
+     ON CONFLICT (player, contract_id) DO UPDATE
        SET last_ledger = EXCLUDED.last_ledger, last_event_at = EXCLUDED.last_event_at
        WHERE games.last_ledger < EXCLUDED.last_ledger`,
     [event.player, event.contractId, event.ledger, event.ledgerClosedAt],
   );
 }
 
+// Every UPDATE below is scoped to (player, contract_id) -- not just
+// player -- so a second contract generation can never fold its events
+// into a first generation's row for the same address.
 async function applyToGameProjection(client: PoolClient, event: DecodedEvent): Promise<void> {
   switch (event.eventType) {
     case "round_resolved": {
       const d = event.data as RoundResolvedData;
       await client.query(
         `UPDATE games SET
-           current_round = GREATEST(current_round, $2),
-           free_round = COALESCE(free_round, CASE WHEN $3 THEN $2 END),
-           status = CASE WHEN $4 THEN 'bankrupt' ELSE status END,
-           bankrupt_round = CASE WHEN $4 THEN $2 ELSE bankrupt_round END
-         WHERE player = $1`,
-        [event.player, d.round, d.hit_free_milestone, d.bankrupt],
+           current_round = GREATEST(current_round, $3),
+           free_round = COALESCE(free_round, CASE WHEN $4 THEN $3 END),
+           status = CASE WHEN $5 THEN 'bankrupt' ELSE status END,
+           bankrupt_round = CASE WHEN $5 THEN $3 ELSE bankrupt_round END
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId, d.round, d.hit_free_milestone, d.bankrupt],
       );
       return;
     }
@@ -86,12 +89,12 @@ async function applyToGameProjection(client: PoolClient, event: DecodedEvent): P
       const d = event.data as ActionTakenData;
       await client.query(
         `UPDATE games SET
-           current_round = GREATEST(current_round, $2),
-           stalls_bought = stalls_bought + CASE WHEN $3 = 'BuyStall' THEN 1 ELSE 0 END,
-           businesses_bought = businesses_bought + CASE WHEN $3 = 'BuyBusiness' THEN 1 ELSE 0 END,
-           side_hustles = side_hustles + CASE WHEN $3 = 'SideHustle' THEN 1 ELSE 0 END
-         WHERE player = $1`,
-        [event.player, d.round, d.action],
+           current_round = GREATEST(current_round, $3),
+           stalls_bought = stalls_bought + CASE WHEN $4 = 'BuyStall' THEN 1 ELSE 0 END,
+           businesses_bought = businesses_bought + CASE WHEN $4 = 'BuyBusiness' THEN 1 ELSE 0 END,
+           side_hustles = side_hustles + CASE WHEN $4 = 'SideHustle' THEN 1 ELSE 0 END
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId, d.round, d.action],
       );
       return;
     }
@@ -99,12 +102,12 @@ async function applyToGameProjection(client: PoolClient, event: DecodedEvent): P
       const d = event.data as GameFinishedData;
       await client.query(
         `UPDATE games SET
-           status = CASE WHEN $2 THEN 'bankrupt' ELSE 'finished' END,
-           final_score = $3,
-           final_cash = $4,
-           finished_at = $5
-         WHERE player = $1`,
-        [event.player, d.bankrupt, d.final_score, d.final_cash, event.ledgerClosedAt],
+           status = CASE WHEN $3 THEN 'bankrupt' ELSE 'finished' END,
+           final_score = $4,
+           final_cash = $5,
+           finished_at = $6
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId, d.bankrupt, d.final_score, d.final_cash, event.ledgerClosedAt],
       );
       return;
     }

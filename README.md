@@ -1,7 +1,7 @@
 # storm-money-backend
 
 Event indexer + leaderboard API for the `storm-economy` Soroban contract
-(`CABDVHFVUJSNTWLHYWWSOWKIZS6OYFOSRLQNXPXI2OICFSHZCNMG4RAT`, Stellar
+(`CBO4POPU3FQXXYE353LKO6KNHT2QJRZGOFDTQEKELS3H2ZZBNEPF3SOE`, Stellar
 testnet). Fills the gap the chain side doesn't: nothing today answers
 "who's played, what are the best scores, how many games finished" without
 hand-querying RPC per address.
@@ -151,9 +151,9 @@ allow is correct here, not a shortcut.
 
 - `events` -- append-only raw log, `paging_token` (the RPC's own
   globally-ordered event ID) as primary key and idempotency gate.
-- `games` -- one row per player (the contract only allows one lifetime
-  game per address, so this is a safe 1:1 key, not a separate game-id
-  scheme).
+- `games` -- one row per player per contract generation (see
+  `002_multi_contract_games_key.sql` below for why "per contract
+  generation" was added after the fact).
 - `ingest_cursor` -- indexer resume position.
 - `leaderboard` -- a view over `games`.
 
@@ -163,6 +163,32 @@ when `INSERT ... ON CONFLICT (paging_token) DO NOTHING` actually inserted
 a new row. Re-polling an already-seen range (which happens on every
 restart) is a safe no-op -- verified by restarting the process against a
 populated database and confirming event/game counts didn't move.
+
+### `002_multi_contract_games_key.sql` -- a real bug this surfaced
+
+The original schema keyed `games` on `player` alone, reasoning "the
+contract only allows one lifetime game per address, so this is a safe
+1:1 key." That reasoning assumed there would only ever be *one* contract.
+It broke the moment a second generation was deployed (the persona
+redeploy, see the top-level README): every app-level query (`/stats`,
+`/leaderboard`, both `/players/:address` routes) read from `games` and
+`leaderboard` with no `contract_id` filter at all, so a second
+generation's rows would have silently shown up mixed into the first
+generation's numbers -- and if the same wallet address ever joined both
+generations, `ON CONFLICT (player) DO UPDATE` would have folded the
+second game's event counts into the first game's row instead of giving
+it a row of its own.
+
+Caught before it caused visible corruption (no address in this project
+happened to reuse itself across generations yet), but the latent bug was
+real and would have fired silently the first time it did. Fixed by:
+widening the `games` primary key to `(player, contract_id)`; scoping
+every route (`stats.ts`, `leaderboard.ts`, both `players.ts` routes) to
+`config.contractId`; and scoping every `UPDATE ... WHERE player = $1` in
+`store.ts`'s projection logic to `WHERE player = $1 AND contract_id = $2`
+instead. `health.ts` already filtered by `config.contractId` and needed
+no change -- it was the one route that happened to get this right from
+the start.
 
 ## Verification performed in this pass
 
@@ -234,7 +260,7 @@ railway add --database postgres
 #    ${{Postgres.DATABASE_URL}} references the Postgres plugin's own
 #    connection string -- don't hardcode one.
 railway variable set DATABASE_URL='${{Postgres.DATABASE_URL}}'
-railway variable set CONTRACT_ID=CABDVHFVUJSNTWLHYWWSOWKIZS6OYFOSRLQNXPXI2OICFSHZCNMG4RAT
+railway variable set CONTRACT_ID=CBO4POPU3FQXXYE353LKO6KNHT2QJRZGOFDTQEKELS3H2ZZBNEPF3SOE
 railway variable set RPC_URL=https://soroban-testnet.stellar.org
 
 # 4. Redeploy so the new variables take effect, then get a public URL.

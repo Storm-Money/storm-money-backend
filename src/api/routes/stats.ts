@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { config } from "../../config.js";
 import { pool } from "../../db/pool.js";
 
 export const statsRouter = Router();
@@ -16,20 +17,26 @@ interface AggregateRow {
 // sentinel in the sample -- same denominator (completed games only),
 // same sentinel-inclusive median, so a number from here can be put next
 // to a row of sim.py's solo_table() output and mean the same thing.
+// Scoped to config.contractId -- the database can hold more than one
+// contract generation's games (see 002_multi_contract_games_key.sql), and
+// these stats must describe only the one this service is currently
+// indexing, not every generation ever played.
 statsRouter.get("/stats", async (_req, res) => {
-  const { rows } = await pool.query<AggregateRow>(`
-    SELECT
+  const { rows } = await pool.query<AggregateRow>(
+    `SELECT
       count(*)::int AS games_total,
       count(*) FILTER (WHERE status = 'bankrupt')::int AS bankrupt_count,
       count(*) FILTER (WHERE free_round IS NOT NULL)::int AS free_count,
       percentile_disc(0.5) WITHIN GROUP (ORDER BY final_score) AS median_score
     FROM games
-    WHERE status IN ('finished', 'bankrupt')
-  `);
+    WHERE status IN ('finished', 'bankrupt') AND contract_id = $1`,
+    [config.contractId],
+  );
   const row = rows[0]!;
 
   const { rows: inProgressRows } = await pool.query<{ count: number }>(
-    `SELECT count(*)::int AS count FROM games WHERE status = 'in_progress'`,
+    `SELECT count(*)::int AS count FROM games WHERE status = 'in_progress' AND contract_id = $1`,
+    [config.contractId],
   );
 
   res.json({

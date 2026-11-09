@@ -239,14 +239,22 @@ needed -- they run against fixed captured fixtures).
 
 ## Deploying to Railway
 
-**Status: prepared, not deployed.** I attempted the deploy in this pass
-(`railway up` from this directory) but it requires completing Railway's
-OAuth sign-in in a real browser, which this sandboxed environment cannot
-do on your behalf -- `railway whoami` still shows unauthorized after the
-attempt. Nothing was created on Railway. The scaffold is ready to deploy
-the moment you run the commands below yourself.
+**Status: deployed and live.** Running at
+`https://backend-production-fb315.up.railway.app` (indexer + API in one
+Railway service, plus a Railway-managed Postgres). `GET /health` returns
+real DB connectivity and the indexer's current cursor/ledger. The web
+client (`storm-money-web`) points its leaderboard fetch at this same URL.
 
-**Exact next steps** (from this directory, `backend/`):
+**Known open gap if you redeploy this from scratch:** as currently
+checked in, `src/db/pool.ts` sets strict TLS verification against any
+non-localhost `DATABASE_URL`. Railway's managed Postgres presents a
+self-signed cert on its internal network, so a fresh deploy against it
+will crash-loop on every start with `SELF_SIGNED_CERT_IN_CHAIN` until
+that file's `ssl` option is relaxed for that specific case. Confirmed
+live against the real deployed service above -- this is an open,
+disclosed gap in this repo's checked-in code, not a hypothetical.
+
+**Steps to redeploy or deploy a fork:**
 
 ```bash
 # 1. Sign in (opens your browser) and create the project + service in one step.
@@ -274,11 +282,6 @@ or build config needed. `npm start` runs migrations before starting the
 server (see `src/index.ts`), so the first deploy against a fresh
 Postgres plugin creates its own schema; there's no separate "release
 command" step to wire up.
-
-Once deployed, update the browser client
-(`web/index.html`) to point at the Railway-issued domain
-for leaderboard/history calls -- that wiring is not part of this pass,
-since the client doesn't call this API yet.
 
 ## Project layout
 

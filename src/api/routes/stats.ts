@@ -39,9 +39,18 @@ statsRouter.get("/stats", async (_req, res) => {
     [config.contractId],
   );
 
+  const gamesInProgress = inProgressRows[0]!.count;
+  // The one number that answers "is this game actually landing with real
+  // players, or do people join and bounce" -- joins (finished + bankrupt +
+  // still in progress) vs. the share that ever reach a finished/bankrupt
+  // end state. A low number here means a game-loop problem, not an infra
+  // problem, and no infra fix will move it.
+  const joinsTotal = row.games_total + gamesInProgress;
   res.json({
     games_total: row.games_total,
-    games_in_progress: inProgressRows[0]!.count,
+    games_in_progress: gamesInProgress,
+    joins_total: joinsTotal,
+    completion_rate: joinsTotal > 0 ? row.games_total / joinsTotal : null,
     bankrupt_rate: row.games_total > 0 ? row.bankrupt_count / row.games_total : null,
     free_rate: row.games_total > 0 ? row.free_count / row.games_total : null,
     median_score: row.median_score,

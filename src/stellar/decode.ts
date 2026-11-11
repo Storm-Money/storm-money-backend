@@ -11,9 +11,22 @@
 //   value     -> a plain JS object keyed by field name for every non-topic
 //                field. Fieldless enum variants (EventRoll, Action) decode
 //                as a one-element array, e.g. roll: ["Emergency"].
+//
+// v3 added five topics (player_joined, loan_taken, loan_repaid,
+// insurance_bought, action_skipped). Those are pinned against real events
+// from the v3 testnet deployment in test/fixtures/v3-events.json; the
+// original three keep the original captured fixtures.
 import { xdr, scValToNative } from "@stellar/stellar-sdk";
 
-export type EventType = "round_resolved" | "action_taken" | "game_finished";
+export type EventType =
+  | "round_resolved"
+  | "action_taken"
+  | "game_finished"
+  | "player_joined"
+  | "loan_taken"
+  | "loan_repaid"
+  | "insurance_bought"
+  | "action_skipped";
 
 export interface RoundResolvedData {
   round: number;
@@ -35,7 +48,38 @@ export interface GameFinishedData {
   bankrupt: boolean;
 }
 
-export type DecodedData = RoundResolvedData | ActionTakenData | GameFinishedData;
+export interface PlayerJoinedData {
+  persona: string; // Persona variant tag: Classic | Hustler | Saver | Builder | Gambler
+  starting_cash: number;
+}
+
+/** Shared by loan_taken and loan_repaid. */
+export interface LoanData {
+  round: number;
+  loans: number; // outstanding loans after this call
+  cash_after: number;
+}
+
+export interface InsuranceBoughtData {
+  round: number;
+}
+
+/** A planned action inside v3's play_round that the round's result made
+ * impossible. error_code 8 is CantAfford, the one seen in practice. */
+export interface ActionSkippedData {
+  round: number;
+  action: string;
+  error_code: number;
+}
+
+export type DecodedData =
+  | RoundResolvedData
+  | ActionTakenData
+  | GameFinishedData
+  | PlayerJoinedData
+  | LoanData
+  | InsuranceBoughtData
+  | ActionSkippedData;
 
 export interface DecodedEvent {
   pagingToken: string;
@@ -61,7 +105,16 @@ export interface RawRpcEvent {
   value: string; // base64 XDR ScVal
 }
 
-const KNOWN_EVENT_TYPES = new Set<EventType>(["round_resolved", "action_taken", "game_finished"]);
+const KNOWN_EVENT_TYPES = new Set<EventType>([
+  "round_resolved",
+  "action_taken",
+  "game_finished",
+  "player_joined",
+  "loan_taken",
+  "loan_repaid",
+  "insurance_bought",
+  "action_skipped",
+]);
 
 function unwrapEnum(v: unknown): string {
   // soroban-sdk fieldless enum variants arrive as a 1-element array:
@@ -69,6 +122,32 @@ function unwrapEnum(v: unknown): string {
   if (Array.isArray(v) && v.length >= 1 && typeof v[0] === "string") return v[0];
   if (typeof v === "string") return v;
   throw new Error(`Expected an enum-shaped value, got ${JSON.stringify(v)}`);
+}
+
+function decodeBody(eventType: EventType, body: any): DecodedData {
+  switch (eventType) {
+    case "round_resolved":
+      return {
+        round: body.round,
+        roll: unwrapEnum(body.roll),
+        cash_after_payday: body.cash_after_payday,
+        bankrupt: body.bankrupt,
+        hit_free_milestone: body.hit_free_milestone,
+      };
+    case "action_taken":
+      return { round: body.round, action: unwrapEnum(body.action), cash_after: body.cash_after };
+    case "game_finished":
+      return { final_score: body.final_score, final_cash: body.final_cash, bankrupt: body.bankrupt };
+    case "player_joined":
+      return { persona: unwrapEnum(body.persona), starting_cash: body.starting_cash };
+    case "loan_taken":
+    case "loan_repaid":
+      return { round: body.round, loans: body.loans, cash_after: body.cash_after };
+    case "insurance_bought":
+      return { round: body.round };
+    case "action_skipped":
+      return { round: body.round, action: unwrapEnum(body.action), error_code: body.error_code };
+  }
 }
 
 /** Decode one raw getEvents entry into a typed, DB-ready record. Throws on
@@ -91,26 +170,7 @@ export function decodeEvent(raw: RawRpcEvent): DecodedEvent {
   }
 
   const eventType = eventName as EventType;
-  const data: DecodedData =
-    eventType === "round_resolved"
-      ? {
-          round: body.round,
-          roll: unwrapEnum(body.roll),
-          cash_after_payday: body.cash_after_payday,
-          bankrupt: body.bankrupt,
-          hit_free_milestone: body.hit_free_milestone,
-        }
-      : eventType === "action_taken"
-        ? {
-            round: body.round,
-            action: unwrapEnum(body.action),
-            cash_after: body.cash_after,
-          }
-        : {
-            final_score: body.final_score,
-            final_cash: body.final_cash,
-            bankrupt: body.bankrupt,
-          };
+  const data = decodeBody(eventType, body);
 
   return {
     pagingToken: raw.id,

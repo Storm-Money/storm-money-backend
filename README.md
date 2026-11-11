@@ -1,10 +1,12 @@
 # storm-money-backend
 
 Event indexer + leaderboard API for the `storm-economy` Soroban contract
-(`CBO4POPU3FQXXYE353LKO6KNHT2QJRZGOFDTQEKELS3H2ZZBNEPF3SOE`, Stellar
-testnet). Fills the gap the chain side doesn't: nothing today answers
-"who's played, what are the best scores, how many games finished" without
-hand-querying RPC per address.
+on Stellar testnet. It currently indexes generation two
+(`CBO4POPU3FQXXYE353LKO6KNHT2QJRZGOFDTQEKELS3H2ZZBNEPF3SOE`); support for
+generation three's events is in `main` ahead of the switch. Fills the gap
+the chain side doesn't: nothing today answers "who's played, what are the
+best scores, how many games finished" without hand-querying RPC per
+address.
 
 This is a solo-dev project. One service, one database, no microservices,
 no queue, no separate worker process. That's a deliberate scope decision,
@@ -13,9 +15,11 @@ not a placeholder for "more later" -- see **Why this shape** below.
 ## What it does
 
 1. **Indexer** (`src/indexer/`, `src/stellar/`): polls Stellar RPC's
-   `getEvents` for the contract's three event types (`RoundResolved`,
-   `ActionTaken`, `GameFinished`), decodes the XDR, and stores both the
-   raw event log and a derived per-player projection.
+   `getEvents` for every event the contract emits -- `RoundResolved`,
+   `ActionTaken`, `GameFinished` on all generations, plus v3's
+   `PlayerJoined`, `LoanTaken`, `LoanRepaid`, `InsuranceBought`, and
+   `ActionSkipped` -- decodes the XDR, and stores both the raw event log
+   and a derived per-player projection.
 2. **Database** (`src/db/`): Postgres. `events` is the append-only log;
    `games` is one row per player (derived); `leaderboard` is a view over
    `games`.
@@ -57,26 +61,33 @@ not have. If write volume ever genuinely outgrows one process, the first
 move is a bigger Postgres plan and a longer poll interval, not a second
 service.
 
-## What the API cannot show you (a contract gap, not a bug here)
+## Coverage, generation by generation
 
-`take_loan`, `repay_loan`, and `buy_insurance` do **not** publish
-contract events (see `storm-economy/src/lib.rs` -- only `roll_and_pay`
-and `take_action` call `.publish(&env)`, and only on the paths that emit
-`RoundResolved`/`ActionTaken`/`GameFinished`). That means loan and
-insurance activity is invisible to this indexer and this API -- only a
-direct `get_state` call against the contract can see it. The `games`
-table's `stalls_bought` / `businesses_bought` / `side_hustles` counters
-are accurate; there is no `loans_taken` counter because there is nothing
-to count it from. If that coverage gap matters later, it's a contract
-change (add events to those three calls), not a backend one.
+On **generation two** (the live one today), `take_loan`, `repay_loan`,
+and `buy_insurance` publish no events, so loan and insurance activity is
+invisible to this indexer and this API -- only a direct `get_state` call
+against the contract can see it. That was a contract gap, not a backend
+one, and the `games.stalls_bought` / `businesses_bought` /
+`side_hustles` counters are unaffected.
+
+**Generation three** closes it. Its `PlayerJoined`, `LoanTaken`,
+`LoanRepaid`, `InsuranceBought`, and `ActionSkipped` events are decoded
+and folded into `games` (migration `003_loan_insurance_skip_counters.sql`:
+`loans_taken`, `loans_repaid`, `insurance_bought`, `actions_skipped`).
+A database that already indexed generation two simply starts those
+counters at zero for the period those events did not exist; on
+generation three they are exact. Deploy order matters: this decoder must
+ship before `CONTRACT_ID` is pointed at generation three -- an event
+whose topic this layer doesn't know is logged and skipped, not indexed.
 
 ## Decode layer: verified against the live contract, not guessed
 
 `src/stellar/decode.ts` is pinned against **real events pulled from the
-live testnet contract** on 2026-10-26 (see `test/fixtures/sample-events.json`
-and `test/decode.test.ts`), not against an assumption about how
-`#[contractevent]` serializes. Two things worth knowing if you touch this
-layer:
+live testnet contracts**, not against an assumption about how
+`#[contractevent]` serializes: `test/fixtures/sample-events.json` for
+generation one (captured 2026-10-26), and `test/fixtures/v3-events.json`
+for generation three's join/one-tx-round/skip/loan events (captured
+2026-11-11). Two things worth knowing if you touch this layer:
 
 - `rpc.Server#getEvents()` (the JS SDK call) returns already-parsed
   `xdr.ScVal` objects for `topic`/`value` and a `Contract` object for
@@ -189,6 +200,16 @@ every route (`stats.ts`, `leaderboard.ts`, both `players.ts` routes) to
 instead. `health.ts` already filtered by `config.contractId` and needed
 no change -- it was the one route that happened to get this right from
 the start.
+
+### `003_loan_insurance_skip_counters.sql` -- adding, not rewriting
+
+The five new v3 topics need somewhere to land, so `games` gains
+`loans_taken`, `loans_repaid`, `insurance_bought`, and `actions_skipped`.
+Deliberately additive: no prior rows are recomputed and no historical
+event data is reinterpreted. The raw `events` table already had every
+decoded event; the projection only lacked the columns. That keeps the
+migration safe to run against the live database, which has no way to
+re-derive what generation two never published.
 
 ## Verification performed in this pass
 

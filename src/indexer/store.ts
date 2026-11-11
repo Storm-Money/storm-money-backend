@@ -98,6 +98,48 @@ async function applyToGameProjection(client: PoolClient, event: DecodedEvent): P
       );
       return;
     }
+    case "player_joined": {
+      // The row is created on any event; a join means round 1 is pending,
+      // so "in progress" is accurate even before the first roll is indexed.
+      await client.query(
+        `UPDATE games SET current_round = GREATEST(current_round, 1)
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId],
+      );
+      return;
+    }
+    case "loan_taken": {
+      await client.query(
+        `UPDATE games SET loans_taken = loans_taken + 1
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId],
+      );
+      return;
+    }
+    case "loan_repaid": {
+      await client.query(
+        `UPDATE games SET loans_repaid = loans_repaid + 1
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId],
+      );
+      return;
+    }
+    case "insurance_bought": {
+      await client.query(
+        `UPDATE games SET insurance_bought = true
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId],
+      );
+      return;
+    }
+    case "action_skipped": {
+      await client.query(
+        `UPDATE games SET actions_skipped = actions_skipped + 1
+         WHERE player = $1 AND contract_id = $2`,
+        [event.player, event.contractId],
+      );
+      return;
+    }
     case "game_finished": {
       const d = event.data as GameFinishedData;
       await client.query(

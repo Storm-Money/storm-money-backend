@@ -3,7 +3,15 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { decodeEvent, type ActionTakenData, type RoundResolvedData, type RawRpcEvent } from "../src/stellar/decode.js";
+import {
+  decodeEvent,
+  type ActionSkippedData,
+  type ActionTakenData,
+  type LoanData,
+  type PlayerJoinedData,
+  type RoundResolvedData,
+  type RawRpcEvent,
+} from "../src/stellar/decode.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,4 +69,61 @@ test("rejects an event with an unrecognized topic[0]", () => {
     value: "AAAAAQ==",
   };
   assert.throws(() => decodeEvent(bogus), /unrecognized topic/);
+});
+
+// v3 fixtures: the exact getEvents response for the v3 testnet deployment
+// (CDRJL2JJEFNL6DZSA5HROPVSOIMLUI2374ZZSY7LATLG5YM7DBH4BUJ5), captured
+// 2026-11-11 after a real join + one-tx round + skip + loan.
+async function loadV3Fixtures(): Promise<RawRpcEvent[]> {
+  const raw = await readFile(path.join(__dirname, "fixtures", "v3-events.json"), "utf8");
+  return JSON.parse(raw) as RawRpcEvent[];
+}
+
+test("decodes v3's PlayerJoined (the event v2 never emitted)", async () => {
+  const events = (await loadV3Fixtures()).map(decodeEvent);
+  const joined = events.filter((e) => e.eventType === "player_joined");
+  assert.equal(joined.length, 2);
+
+  const data = joined[0]!.data as PlayerJoinedData;
+  assert.equal(data.persona, "Hustler");
+  assert.equal(data.starting_cash, 10);
+});
+
+test("decodes every event from a one-transaction round", async () => {
+  const events = (await loadV3Fixtures()).map(decodeEvent);
+  const round = events.find((e) => e.eventType === "round_resolved");
+  assert.ok(round);
+
+  const actions = events.filter((e) => e.eventType === "action_taken");
+  assert.equal(actions.length, 2);
+  assert.deepEqual(
+    actions.map((a) => (a.data as ActionTakenData).action),
+    ["SideHustle", "SideHustle"],
+  );
+  assert.deepEqual(
+    actions.map((a) => (a.data as ActionTakenData).cash_after),
+    [18, 23],
+  );
+});
+
+test("decodes v3's ActionSkipped instead of dropping the event", async () => {
+  const events = (await loadV3Fixtures()).map(decodeEvent);
+  const skipped = events.filter((e) => e.eventType === "action_skipped");
+  assert.equal(skipped.length, 1);
+
+  const data = skipped[0]!.data as ActionSkippedData;
+  assert.equal(data.round, 1);
+  assert.equal(data.action, "BuyBusiness");
+  assert.equal(data.error_code, 8); // Error::CantAfford
+});
+
+test("decodes v3's LoanTaken", async () => {
+  const events = (await loadV3Fixtures()).map(decodeEvent);
+  const loan = events.find((e) => e.eventType === "loan_taken");
+  assert.ok(loan);
+
+  const data = loan.data as LoanData;
+  assert.equal(data.round, 1);
+  assert.equal(data.loans, 1);
+  assert.equal(data.cash_after, 23);
 });

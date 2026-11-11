@@ -237,41 +237,21 @@ curl localhost:8080/stats
 Run the unit tests any time with `npm test` (no database or network
 needed -- they run against fixed captured fixtures).
 
-## Deploying to Railway
+## Deployed on Railway
 
-**Status: deployed and live.** Running at
-`https://backend-production-fb315.up.railway.app` (indexer + API in one
-Railway service, plus a Railway-managed Postgres). `GET /health` returns
-real DB connectivity and the indexer's current cursor/ledger. The web
-client (`storm-money-web`) points its leaderboard fetch at this same URL.
+**Status: live** at
+https://backend-production-fb315.up.railway.app (`/health`, `/leaderboard`,
+`/stats`, `/players/:address`). The web client's leaderboard card reads
+this domain.
 
-**Known open gap if you redeploy this from scratch:** as currently
-checked in, `src/db/pool.ts` sets strict TLS verification against any
-non-localhost `DATABASE_URL`. Railway's managed Postgres presents a
-self-signed cert on its internal network, so a fresh deploy against it
-will crash-loop on every start with `SELF_SIGNED_CERT_IN_CHAIN` until
-that file's `ssl` option is relaxed for that specific case. Confirmed
-live against the real deployed service above -- this is an open,
-disclosed gap in this repo's checked-in code, not a hypothetical.
-
-**Steps to redeploy or deploy a fork:**
+Redeploying from this directory (needs a Railway project this account can
+write to; a new project can hit the free plan's resource limit):
 
 ```bash
-# 1. Sign in (opens your browser) and create the project + service in one step.
 railway up
-#    -- first run: creates a new Railway project from this directory.
-
-# 2. Add a Postgres database to that same project.
-railway add --database postgres
-
-# 3. Point the service at it and set the contract config.
-#    ${{Postgres.DATABASE_URL}} references the Postgres plugin's own
-#    connection string -- don't hardcode one.
 railway variable set DATABASE_URL='${{Postgres.DATABASE_URL}}'
 railway variable set CONTRACT_ID=CBO4POPU3FQXXYE353LKO6KNHT2QJRZGOFDTQEKELS3H2ZZBNEPF3SOE
 railway variable set RPC_URL=https://soroban-testnet.stellar.org
-
-# 4. Redeploy so the new variables take effect, then get a public URL.
 railway up
 railway domain
 ```
@@ -279,9 +259,24 @@ railway domain
 Railway's Nixpacks builder auto-detects this as a Node project from
 `package.json` and runs `npm install` then `npm start` -- no Dockerfile
 or build config needed. `npm start` runs migrations before starting the
-server (see `src/index.ts`), so the first deploy against a fresh
-Postgres plugin creates its own schema; there's no separate "release
-command" step to wire up.
+server (see `src/index.ts`), so a fresh deploy against an empty Postgres
+creates its own schema; there's no separate "release command" step to
+wire up.
+
+The browser client points at that domain through `CONFIG.leaderboardApi`
+in `web/app.js` (overridable with `?api=` for local development).
+
+### TLS: one deliberate exception
+
+`src/db/pool.ts` disables certificate *verification*
+(`ssl: { rejectUnauthorized: false }`) for non-localhost
+`DATABASE_URL`s. That is not a downgrade to plaintext — the connection
+is still encrypted — but Railway's managed Postgres presents a
+self-signed cert on its internal network, so there is no public CA to
+verify against. Without it a fresh deploy crash-loops on every start
+with `SELF_SIGNED_CERT_IN_CHAIN`, confirmed against the live service.
+If this ever moves to a Postgres provider with a real CA, switch back to
+`ssl: true` (or pin that provider's CA) rather than leaving this on.
 
 ## Project layout
 

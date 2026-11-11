@@ -240,9 +240,10 @@ needed -- they run against fixed captured fixtures).
 ## Deployed on Railway
 
 **Status: live** at
-https://backend-production-fb315.up.railway.app (`/health`, `/leaderboard`,
-`/stats`, `/players/:address`). The web client's leaderboard card reads
-this domain.
+https://backend-production-fb315.up.railway.app — indexer and API in one
+Railway service, plus a Railway-managed Postgres. `GET /health` returns
+real DB connectivity and the indexer's current cursor/ledger. The web
+client's leaderboard card reads this domain.
 
 Redeploying from this directory (needs a Railway project this account can
 write to; a new project can hit the free plan's resource limit):
